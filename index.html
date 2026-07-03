@@ -67,6 +67,8 @@
     padding:8px 10px;border-radius:7px;border:1px solid var(--border);overflow-x:auto;white-space:nowrap}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   @media(max-width:1100px){.two{grid-template-columns:1fr}}
+  .btn{background:var(--accent);color:#04101f;border:none;border-radius:7px;padding:7px 13px;font-weight:600;cursor:pointer;font-size:12.5px}
+  .btn:hover{filter:brightness(1.08)}
 </style>
 </head>
 <body>
@@ -75,7 +77,10 @@
     <h1>负载曲线生成器 <span style="color:var(--muted);font-weight:400;font-size:14px">Power Profile</span></h1>
     <p>形状 × 标定解耦 · 两层基载 · 账单硬锚反解 A_work · ε 噪声表逐日纹理</p>
   </div>
-  <span class="badge">SPEC-AlphaProposal v1.0</span>
+  <div style="display:flex;gap:10px;align-items:center">
+    <button id="exportBtn" class="btn">⬇ 导出全年 CSV</button>
+    <span class="badge">SPEC-AlphaProposal v1.0</span>
+  </div>
 </header>
 
 <div class="layout">
@@ -359,14 +364,16 @@ function compute(p){
   cal.days.forEach(d=>{ monthSum[d.m]+=dayProfile(d).sum; });
   const renorm=Em.map((e,m)=>monthSum[m]>0?e/monthSum[m]:0);
 
-  // pass2：max(P)、代表日、逐月基载/生产
+  // pass2：max(P)、代表日、逐月基载/生产、全年逐时序列
   let maxP=0;
-  const wdList=[], odList=[], monthBase=Array(12).fill(0);
+  const wdList=[], odList=[], monthBase=Array(12).fill(0), series=[];
   cal.days.forEach(d=>{
     const pr=dayProfile(d), r=renorm[d.m];
-    for(let h=0;h<24;h++){ const v=pr.arr[h]*r; if(v>maxP)maxP=v; }
+    const curve=pr.arr.map(v=>v*r);
+    for(let h=0;h<24;h++) if(curve[h]>maxP)maxP=curve[h];
     monthBase[d.m]+=pr.baseSum*r;
     (d.isWork?wdList:odList).push({energy:pr.sum*r, doy:d.doy, epsDow:d.epsDow, isWork:d.isWork, m:d.m});
+    series.push({doy:d.doy, dow:d.epsDow, isWork:d.isWork, curve});
   });
   function repDay(list){                               // 代表日 = 日电量中位数那天
     if(!list.length)return null;
@@ -380,7 +387,7 @@ function compute(p){
   const Etotal=Em.reduce((a,b)=>a+b,0);
   const LF=Etotal/(P*cal.totalDays*24);
   const baseShare=Etotal>0?monthBase.reduce((a,b)=>a+b,0)/Etotal:0;
-  return {Em,monthBase,monthProd,Etotal,LF,maxP,baseShare,Aw,degrade,repWd,repOd,isLeap:cal.isLeap};
+  return {Em,monthBase,monthProd,Etotal,LF,maxP,baseShare,Aw,degrade,repWd,repOd,isLeap:cal.isLeap,series,year:p.year};
 }
 
 // ---------- 渲染：指标 + 校验提示 ----------
@@ -462,6 +469,27 @@ function update(){
   $("odLabel").textContent=r.repOd?`非工作日代表日（${r.repOd.m+1}月 · 日电量 ${(r.repOd.energy/1000).toFixed(1)} MWh）`:"非工作日代表日";
 }
 
+// ---------- 导出全年逐时 CSV ----------
+function exportCSV(){
+  const p=readParams(); if(p.segs.length===0){alert("工作时段无效，无法导出");return;}
+  const r=compute(p);
+  const start=new Date(p.year,0,1);
+  const rows=["日期,时刻,星期,类型,负载_kW"];
+  r.series.forEach(d=>{
+    const dt=new Date(start.getTime()); dt.setDate(dt.getDate()+d.doy);
+    const ds=dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
+    const wk=DOW_NAMES[d.dow], tp=d.isWork?"工作日":"非工作日";
+    for(let h=0;h<24;h++) rows.push(`${ds},${String(h).padStart(2,"0")}:00,${wk},${tp},${d.curve[h].toFixed(2)}`);
+  });
+  const blob=new Blob(["﻿"+rows.join("\n")],{type:"text/csv;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  const name=$("preset").selectedOptions[0]?.textContent||"load";
+  const a=document.createElement("a");
+  a.href=url; a.download=`负载曲线_${name}_${p.year}_${r.isLeap?8784:8760}h.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ---------- 初始化 ----------
 function applyPreset(cat,name){
   const d=PRESETS[cat][name]; if(!d)return;
@@ -482,6 +510,7 @@ function applyPreset(cat,name){
   sel.addEventListener("change",e=>{const [c,n]=e.target.value.split("||");applyPreset(c,n);});
   document.querySelectorAll("input,select").forEach(el=>{el.addEventListener("input",update);el.addEventListener("change",update);});
   window.addEventListener("resize",update);
+  $("exportBtn").addEventListener("click",exportCSV);
   sel.value="制造业||Garment 制衣";
   applyPreset("制造业","Garment 制衣");
 })();
