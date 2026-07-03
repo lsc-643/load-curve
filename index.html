@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<!--
+  负载曲线生成器 · Power Profile（AlphaESS Alpha Proposal）
+  单文件、零依赖：浏览器直接打开即可运行，无构建步骤。
+  实现来源：
+    需求    负载生成规则.md（PM 文档，含飞书原链接）
+    算法    SPEC-AlphaProposal-负载曲线生成算法.md（工程 SPEC v1.0）
+    纹理    ε_噪声表.xlsx → DAY_FACTOR / HOUR_TEX（由 tools/gen_texture_js.py 生成）
+  详见 ONBOARDING.md / AGENTS.md。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>负载曲线生成器 · Power Profile</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#181b22; --panel2:#1f232c; --border:#2a2f3a;
+    --text:#e6e9ef; --muted:#9aa3b2; --accent:#4f9dff; --accent2:#ffab40;
+    --base:#3a4a63; --prod:#4f9dff; --ok:#3ecf8e; --warn:#ffcc4d; --err:#ff6b6b;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;
+    font-size:14px;line-height:1.5}
+  header{padding:16px 24px;border-bottom:1px solid var(--border);background:var(--panel);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+  header h1{margin:0;font-size:18px;font-weight:600}
+  header p{margin:4px 0 0;color:var(--muted);font-size:12.5px}
+  .badge{font-size:11px;background:rgba(79,157,255,.15);color:var(--accent);border:1px solid rgba(79,157,255,.35);padding:3px 9px;border-radius:20px}
+  .layout{display:grid;grid-template-columns:420px 1fr}
+  @media(max-width:900px){.layout{grid-template-columns:1fr}}
+  .controls{padding:16px;border-right:1px solid var(--border);overflow-y:auto;max-height:calc(100vh - 66px)}
+  fieldset{border:1px solid var(--border);border-radius:10px;margin:0 0 14px;padding:12px 12px 6px}
+  legend{padding:0 6px;color:var(--accent);font-size:12px;font-weight:600}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+  .row label{color:var(--muted);flex:1;font-size:12.5px;white-space:nowrap}
+  .row .hint{font-size:11px;color:#6b7280}
+  input[type=number],input[type=text],select{
+    background:var(--panel2);border:1px solid var(--border);color:var(--text);
+    border-radius:7px;padding:6px 8px;width:110px;font-size:13px;font-family:var(--mono)}
+  select{width:100%;font-family:inherit}
+  input[type=range]{width:120px;accent-color:var(--accent)}
+  .slider-row{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+  .slider-row .top{display:flex;justify-content:space-between}
+  .slider-row .val{font-family:var(--mono);color:var(--accent)}
+  input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px}
+  .main{padding:18px 22px;overflow-y:auto;max-height:calc(100vh - 66px)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:18px}
+  .card h2{margin:0 0 10px;font-size:14px;font-weight:600}
+  .card h2 .sub{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+  canvas{width:100%;display:block}
+  .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .metric{background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:10px 12px}
+  .metric .k{font-size:11.5px;color:var(--muted)}
+  .metric .v{font-size:19px;font-weight:600;font-family:var(--mono);margin-top:2px}
+  .metric .v small{font-size:12px;color:var(--muted);font-weight:400}
+  .alerts{display:flex;flex-direction:column;gap:8px}
+  .alert{padding:9px 12px;border-radius:8px;font-size:12.5px;border:1px solid}
+  .alert.ok{background:rgba(62,207,142,.08);border-color:rgba(62,207,142,.35);color:var(--ok)}
+  .alert.warn{background:rgba(255,204,77,.08);border-color:rgba(255,204,77,.35);color:var(--warn)}
+  .alert.err{background:rgba(255,107,107,.08);border-color:rgba(255,107,107,.35);color:var(--err)}
+  .legend-chips{display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .chip i{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .formula{font-family:var(--mono);font-size:12px;color:var(--muted);background:var(--panel2);
+    padding:8px 10px;border-radius:7px;border:1px solid var(--border);overflow-x:auto;white-space:nowrap}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1100px){.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>负载曲线生成器 <span style="color:var(--muted);font-weight:400;font-size:14px">Power Profile</span></h1>
+    <p>形状 × 标定解耦 · 两层基载 · 账单硬锚反解 A_work · ε 噪声表逐日纹理</p>
+  </div>
+  <span class="badge">SPEC-AlphaProposal v1.0</span>
+</header>
+
+<div class="layout">
+  <!-- ============ 输入面板 ============ -->
+  <div class="controls">
+    <fieldset>
+      <legend>行业类型（形态库 23 细类）</legend>
+      <div class="row"><select id="preset"></select></div>
+      <div class="row"><span class="hint">选类目自动填形态 + ε 波动幅度</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>电量与峰值</legend>
+      <div class="row"><label>峰值 P_peak</label><input type="number" id="ppeak" value="800" step="10"><span class="hint">kW</span></div>
+      <div class="row"><label>月账单电量</label><input type="text" id="bills" value="120000" style="width:180px"></div>
+      <div class="row"><span class="hint">1 个值=全年同值；或 12 个逗号值 kWh</span></div>
+      <div class="row"><label>年柴油供电量</label><input type="number" id="ediesel" value="0" step="5000"><span class="hint">kWh</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>两层基载（%P_peak）</legend>
+      <div class="slider-row">
+        <div class="top"><label>B_off 非工作时段</label><span class="val" id="boffV">4%</span></div>
+        <input type="range" id="boff" min="0" max="100" value="4">
+      </div>
+      <div class="slider-row">
+        <div class="top"><label>B_work 工作地板</label><span class="val" id="bworkV">45%</span></div>
+        <input type="range" id="bwork" min="0" max="100" value="45">
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>工作窗口与日历</legend>
+      <div class="row"><label>工作时段</label><input type="text" id="segments" value="8-18" style="width:130px"></div>
+      <div class="row"><span class="hint">如 0-24 / 8-18 / 6-10,14-18（多段并集）</span></div>
+      <div class="row"><label>午休凹陷 δ</label><input type="number" id="lunchd" value="0.4" step="0.05" min="0" max="1"></div>
+      <div class="row"><label>午休时段</label><input type="text" id="lunchseg" value="12-13"></div>
+      <div class="row"><label>年份（闰年→8784）</label><input type="number" id="year" value="2026" step="1"></div>
+      <div class="row"><label>年节假日天数</label><input type="number" id="holidays" value="11" step="1" min="0"></div>
+      <div class="row"><span class="hint">周末/节假日 → 全天 B_off</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>生产峰形状 g[h]（高斯叠加）</legend>
+      <div class="row"><label>峰1 μ₁ / σ₁</label><input type="number" id="mu1" value="10.5" step="0.5" style="width:52px"><input type="number" id="sig1" value="1.5" step="0.5" style="width:52px"></div>
+      <div class="row"><label>峰2 μ₂ / σ₂</label><input type="number" id="mu2" value="15" step="0.5" style="width:52px"><input type="number" id="sig2" value="1.5" step="0.5" style="width:52px"></div>
+      <div class="row"><span class="hint">尖峰 σ1.5~2.5；近平直 σ8~10；峰2 留空=单峰</span></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>纹理 ε（ε_噪声表.xlsx）</legend>
+      <div class="row"><label>启用 ε 噪声</label><input type="checkbox" id="epson" checked></div>
+      <div class="row"><label>波动幅度</label><input type="number" id="amp" value="0.1" step="0.01" min="0" max="1"><span class="hint">按类型</span></div>
+      <div class="row"><span class="hint">ε=幅度×(日因子[d]+0.4×时纹理[星期][h])，全年确定性</span></div>
+    </fieldset>
+  </div>
+
+  <!-- ============ 主区域 ============ -->
+  <div class="main">
+    <div class="card">
+      <h2>关键指标 <span class="sub">全年逐时生成后统计</span></h2>
+      <div class="metrics" id="metrics"></div>
+      <div style="height:12px"></div>
+      <div class="alerts" id="alerts"></div>
+    </div>
+
+    <div class="card">
+      <h2>代表日曲线 <span class="sub">取日电量中位数那天（含 ε）</span></h2>
+      <div class="legend-chips">
+        <span class="chip"><i style="background:var(--base)"></i>基载层</span>
+        <span class="chip"><i style="background:var(--prod)"></i>生产峰</span>
+        <span class="chip"><i style="background:var(--accent2)"></i>P_peak 参考线（非硬帽）</span>
+      </div>
+      <div class="two">
+        <div><div style="font-size:12px;color:var(--muted);margin-bottom:4px" id="wdLabel">工作日代表日</div><canvas id="wdChart" height="260"></canvas></div>
+        <div><div style="font-size:12px;color:var(--muted);margin-bottom:4px" id="odLabel">非工作日代表日</div><canvas id="odChart" height="260"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>逐月电量 <span class="sub">Σ 构造性 = 账单+柴油</span></h2>
+      <div class="legend-chips">
+        <span class="chip"><i style="background:var(--base)"></i>基载电量</span>
+        <span class="chip"><i style="background:var(--prod)"></i>生产电量</span>
+      </div>
+      <canvas id="monthChart" height="220"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>核心公式</h2>
+      <div class="formula">P(d,h) = P_peak · ( f_base[h] + A_work(m)·f_prod[h] ) · (1 + ε(d,h))　→ 逐月电量归一化</div>
+      <div style="height:6px"></div>
+      <div class="formula">ε(d,h) = 波动幅度 · ( 日因子[d] + 0.4 · 时纹理[星期(d)][h] )</div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ===================================================================
+ * ε 噪声表（来自 ε_噪声表.xlsx，经 tools/gen_texture_js.py 生成）
+ *   ε(d,h) = 波动幅度 × ( 日因子[日序 d] + 0.4 × 时纹理[星期][h] )
+ *   DAY_FACTOR : 365 天，每天一个量级偏差（零均值 σ≈1），逐日不同
+ *   HOUR_TEX   : HOUR_TEX[hour] = [周一, 周二, …, 周日]
+ * =================================================================== */
+const DAY_FACTOR=[-0.197, -1.298, -0.536, -0.608, 0.237, -0.109, -0.211, 0.434, 1.236, 2.5, -0.222, -0.666, -0.895, -0.433, -0.385, 2.066, 1.508, 2.307, 2.5, 0.721, -0.361, -0.428, -0.757, 0.653, 0.124, -1.206, -0.73, -1.429, -0.905, -0.444, -1.255, -1.04, -1.566, -1.402, 0.271, 1.042, 0.008, 0.947, 1.1, 0.056, 1.194, 1.504, 1.574, 0.248, 0.031, -0.601, -1.591, -1.105, -1.176, -0.371, 1.458, 1.594, 1.597, 1.263, 1.894, 2.473, 0.533, 0.104, 0.577, 0.606, -0.194, 0.262, -0.471, 0.521, -0.321, -0.707, 0.346, -0.724, 0.222, 0.21, -0.575, 0.42, 1.565, 0.99, 1.802, -0.525, -1.003, -0.644, -0.303, 0.065, -0.266, 0.05, -1.763, -0.671, -0.015, -0.48, -0.505, -0.484, -1.461, -0.656, -1.82, -0.113, 0.828, 0.034, 0.107, -0.134, 0.293, -0.354, -1.959, -0.405, -0.359, 0.324, 0.293, -0.102, -0.764, -0.986, 0.203, 0.183, -0.449, 0.327, 0.938, 0.326, 1.65, 1.376, 1.885, 1.154, 1.53, 0.722, 0.831, -0.182, 0.962, -0.62, -1.404, 0.782, 1.331, 0.035, 0.04, 0.402, 1.504, 0.953, 0.704, 1.66, 1.747, 1.043, -0.223, -0.275, 0.547, 2.124, 0.791, 0.463, 0.695, 1.921, 2.157, 0.616, 0.662, 1.455, -0.551, 1.142, 1.12, 0.583, -0.144, -0.178, -0.59, -0.528, -0.651, -0.867, -0.071, -0.869, 0.246, -0.259, -1.562, -1.123, -1.155, 0.788, 0.414, 0.506, 0.315, -2.054, -1.434, -1.075, -1.07, -0.982, 0.511, 1.35, 0.543, -0.537, -0.944, -0.817, -0.903, -1.136, -0.768, 0.821, 0.707, 0.292, 0.322, 0.88, 0.547, -0.415, -0.232, -0.374, 0.268, -1.16, -0.951, -1.256, -1.718, -1.016, -0.204, -0.363, -0.578, -1.18, -0.03, -0.601, -0.188, 0.172, 0.691, 0.756, -0.382, 0.318, 1.075, 0.989, 0.789, -0.213, 0.289, 0.748, 0.92, 0.98, 1.033, -0.212, -0.271, -1.66, -1.703, -0.692, -0.939, -0.5, -1.144, -2.5, -0.791, -1.469, 0.498, -0.553, -0.949, -1.646, 0.004, -0.178, -0.399, -1.403, -1.629, 0.157, 0.458, 1.832, 0.413, -0.553, -0.64, 0.54, 0.545, 1.11, 1.828, 1.609, -1.088, -0.478, 0.216, -1.849, -0.612, 0.004, 1.11, 1.663, -0.005, -0.661, -0.968, -0.725, -0.844, -1.47, -2.146, -2.305, -0.884, -0.117, -0.117, 0.768, 0.873, 0.002, -0.746, -0.739, 0.161, 0.123, 0.083, -0.627, -0.43, 0.389, -0.047, -1.15, -0.893, 0.642, 0.938, -0.368, -0.987, -0.41, 0.608, 1.904, 1.256, 0.334, -2.266, -0.504, -0.067, 0.955, -0.588, 0.628, -0.701, -1.163, -1.836, -1.581, -0.068, -0.078, -0.79, 0.296, 1.037, 2.096, 0.38, 1.115, 2.324, 1.55, 0.876, 0.576, 0.786, 0.18, 0.072, -0.019, -0.345, -0.427, -2.436, -1.169, -0.312, 1.283, -0.394, -0.222, -0.072, -0.552, -0.059, 0.288, 0.246, -0.645, -0.139, -0.993, -0.365, 1.315, 1.868, 0.602, 0.815, -1.169, -0.063, -0.554, -0.226, -1.284, -0.606, 0.828, 0.841, -1.264, -1.142, -0.127, -1.565, -0.441, -0.59, -0.508, -1.438, 1.296, 0.513, -0.333, -0.619, 1.475, 1.788, -0.011, 1.347, 1.169, 1.521, -0.534, -0.793];
+const HOUR_TEX=[[0.69,-0.727,-1.013,-0.081,-0.775,0.241,-0.453],[0.747,-1.826,-1.655,1.043,0.349,1.042,1.319],[0.162,-1.179,-1.471,1.416,-0.773,1.311,1.609],[-0.476,-1.461,-0.376,0.857,0.293,1.319,-0.042],[0.46,-1.625,-0.35,0.958,-0.602,0.998,0.563],[0.797,-0.711,0.727,1.813,0.129,0.495,0.785],[0.243,0.069,1.428,1.643,0.091,-0.916,1.048],[1.113,0.01,-0.177,0.29,-0.397,-0.389,0.776],[-0.417,-0.152,1.129,0.493,-0.933,-0.637,1.054],[0.228,1.187,0.188,-0.083,-0.304,-0.798,-0.473],[-0.277,0.512,0.133,-1.102,0.133,-0.846,-0.783],[-0.138,1.182,1.244,-1.365,1.911,-1.664,-0.496],[-0.577,0.257,1.097,-1.092,1.965,-2.5,-1.231],[-0.332,-0.041,1.079,-1.07,0.887,-0.848,-0.113],[-1.836,1.321,0.95,-0.46,1.705,0.07,-0.644],[-0.8,0.675,1.997,-1.625,-0.576,-0.28,-1.2],[-1.056,0.128,0.31,-0.879,0.868,-0.388,-2.245],[-0.491,0.895,-0.258,-1.042,0.49,0.557,-1.66],[-2.5,2.16,-0.533,-0.9,-0.051,0.187,1.186],[-0.145,1.001,-0.438,-0.638,0.854,1.074,-0.11],[1.273,-0.806,-1.265,-0.02,-0.614,1.114,1.322],[0.325,0.376,-1.289,0.184,-1.549,-0.2,-0.148],[1.092,-0.455,-0.966,1.123,-1.881,0.534,0.333],[2.089,-0.789,-0.493,0.537,-1.221,0.838,-0.399]];
+
+/* ===================================================================
+ * 行业形态库（SPEC §5 · 23 细类）
+ *   boff/bwork : 两层基载（%P_peak）   seg : 默认工作窗口（可多段）
+ *   ld/ls      : 午休凹陷 δ / 时段      p : 高斯产量峰 [[μ,σ],…]
+ *   amp        : ε 波动幅度（取自 ε_噪声表.xlsx「波动幅度」页）
+ * =================================================================== */
+const PRESETS={
+"农产品加工":{
+  "Rice Milling 碾米":       {boff:4, bwork:50,seg:"7-19", ld:0.4, ls:"12-13",p:[[11,2],[15,2]],   amp:0.08},
+  "Food Processing 食品加工":{boff:4, bwork:50,seg:"8-18", ld:0.4, ls:"12-13",p:[[10,2],[15,2]],   amp:0.08},
+  "Farm 养殖场":             {boff:40,bwork:55,seg:"5-21", ld:0,   ls:"",     p:[[6,1],[17,1.5]],  amp:0.06},
+},
+"制造业":{
+  "Fabric 纺织(三班连续)":   {boff:40,bwork:60,seg:"0-24", ld:0,   ls:"",     p:[[14,8]],          amp:0.06},
+  "Garment 制衣":            {boff:4, bwork:45,seg:"8-18", ld:0.4, ls:"12-13",p:[[10.5,1.5],[15,1.5]],amp:0.1},
+  "Wood & Furniture 木材家具":{boff:4,bwork:45,seg:"8-17", ld:0.4, ls:"12-13",p:[[10,1.5],[15,1.5]],amp:0.1},
+  "Plastics & Rubber 塑料橡胶":{boff:4,bwork:60,seg:"8-20",ld:0,   ls:"",     p:[[14,6]],          amp:0.08},
+  "Metal Fabrication 金属加工":{boff:4,bwork:50,seg:"8-18",ld:0.4, ls:"12-13",p:[[10,2],[15,2]],   amp:0.1},
+  "Processing factory 代加工":{boff:4,bwork:45,seg:"8-18", ld:0.4, ls:"12-13",p:[[10.5,1.5],[15,1.5]],amp:0.1},
+  "其他工厂":                {boff:4, bwork:50,seg:"8-18", ld:0.2, ls:"12-13",p:[[10,2],[15,2]],   amp:0.1},
+  "Cement 水泥建材":         {boff:4, bwork:80,seg:"0-24", ld:0,   ls:"",     p:[[14,8]],          amp:0.03},
+  "Mining 采矿":             {boff:4, bwork:70,seg:"8-18", ld:0,   ls:"",     p:[[14,8]],          amp:0.04},
+  "Chemical 化工":           {boff:4, bwork:80,seg:"0-24", ld:0,   ls:"",     p:[[14,8]],          amp:0.03},
+},
+"商业服务":{
+  "Shopping Mall 商场":      {boff:40,bwork:60,seg:"10-21",ld:0,   ls:"",     p:[[19,2]],          amp:0.08},
+  "Supermarket 超市零售":    {boff:40,bwork:60,seg:"8-22", ld:0,   ls:"",     p:[[18,3]],          amp:0.06},
+  "Restaurant 餐饮":         {boff:40,bwork:55,seg:"9-22", ld:0,   ls:"",     p:[[12,1.5],[19,2]], amp:0.1},
+  "Hotel 酒店":              {boff:40,bwork:60,seg:"0-24", ld:0,   ls:"",     p:[[8,2],[20,2.5]],  amp:0.05},
+  "Charging Station 充电站": {boff:4, bwork:50,seg:"6-24", ld:0,   ls:"",     p:[[8,1.5],[19,2]],  amp:0.15},
+  "Hospital 医院":           {boff:20,bwork:80,seg:"0-24", ld:0,   ls:"",     p:[[10,2.5],[20,2.5]],amp:0.04},
+  "School 学校":             {boff:4, bwork:50,seg:"8-17", ld:0.2, ls:"12-13",p:[[11,2.5]],        amp:0.05},
+  "Office Building 办公楼":  {boff:4, bwork:50,seg:"8-18", ld:0.2, ls:"12-13",p:[[10,2],[15,2]],   amp:0.05},
+},
+"基础设施/物流":{
+  "Warehouse 仓储物流":      {boff:4, bwork:50,seg:"8-18", ld:0.15,ls:"12-13",p:[[9,1.5],[16,1.5]],amp:0.08},
+  "Cold Storage 冷库":       {boff:80,bwork:80,seg:"0-24", ld:0,   ls:"",     p:[[14,6]],          amp:0.03},
+  "— 无模板兜底 —":          {boff:40,bwork:50,seg:"8-18", ld:0.2, ls:"12-13",p:[[10,2],[15,2]],   amp:0.06},
+},
+};
+
+// ---------- 工具 ----------
+const $=id=>document.getElementById(id);
+const MONTH_NAMES=["1","2","3","4","5","6","7","8","9","10","11","12"];
+const DOW_NAMES=["周一","周二","周三","周四","周五","周六","周日"];
+function parseSegs(str){
+  const segs=[];
+  (str||"").split(",").forEach(part=>{
+    const m=part.trim().match(/^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/);
+    if(m){const a=+m[1],b=+m[2]; if(b>a) segs.push([a,Math.min(b,24)]);}
+  });
+  return segs;
+}
+function inSegs(h,segs){return segs.some(s=>h>=s[0]&&h<s[1]);}
+function niceMax(v){if(v<=0)return 1;const e=Math.pow(10,Math.floor(Math.log10(v)));const n=v/e;return (n<=1?1:n<=2?2:n<=5?5:10)*e;}
+
+// ---------- 读取输入 ----------
+function readParams(){
+  const boff=+$("boff").value/100, bwork=+$("bwork").value/100;
+  const peaks=[];
+  if(+$("sig1").value>0) peaks.push({mu:+$("mu1").value,sig:+$("sig1").value});
+  if($("mu2").value!=="" && +$("sig2").value>0) peaks.push({mu:+$("mu2").value,sig:+$("sig2").value});
+  let bills=$("bills").value.split(",").map(x=>+x.trim()).filter(x=>!isNaN(x));
+  let billErr=false, Egrid;
+  if(bills.length===1) Egrid=Array(12).fill(bills[0]);
+  else if(bills.length===12) Egrid=bills;
+  else {billErr=true; Egrid=Array(12).fill(bills[0]||0);}
+  return {
+    ppeak:+$("ppeak").value, Egrid, ediesel:+$("ediesel").value,
+    boff, bwork, segs:parseSegs($("segments").value), lunch:parseSegs($("lunchseg").value),
+    delta:+$("lunchd").value, peaks, year:+$("year").value, holidays:+$("holidays").value,
+    epson:$("epson").checked, amp:+$("amp").value, billErr, nbills:bills.length
+  };
+}
+
+// ---------- 单日模板：base[24], prodRaw[24]（A_work=1，含段边沿爬坡）----------
+function buildTemplate(p){
+  const base=Array(24), prodRaw=Array(24), graw=Array(24), lunch=Array(24), ramp=Array(24).fill(false);
+  p.segs.forEach(([on,off])=>{                       // 每段首末工作小时标记为爬坡
+    const first=Math.floor(on), last=Math.ceil(off)-1;
+    if(first>=0&&first<24) ramp[first]=true;
+    if(last>=0&&last<24) ramp[last]=true;
+  });
+  for(let h=0;h<24;h++){
+    const inW=inSegs(h,p.segs);
+    let b=inW?p.bwork:p.boff;
+    if(inW&&ramp[h]) b=(p.boff+p.bwork)/2;            // 爬坡小时取两层均值
+    base[h]=b;
+    let g=0;
+    if(inW) for(const pk of p.peaks) g+=Math.exp(-((h-pk.mu)**2)/(2*pk.sig*pk.sig));
+    graw[h]=g;
+    lunch[h]=inSegs(h,p.lunch)?(1-p.delta):1;
+  }
+  const gmax=Math.max(...graw,1e-9);
+  for(let h=0;h<24;h++){
+    const inW=inSegs(h,p.segs);
+    let pf=inW?(1-p.bwork)*(graw[h]/gmax)*lunch[h]:0;
+    if(inW&&ramp[h]) pf*=0.5;                         // 爬坡小时生产减半
+    prodRaw[h]=pf;
+  }
+  return {base,prodRaw};
+}
+
+// ---------- 项目当年日历：每天 {月, 星期(0=周一), 日序, 是否工作日} ----------
+function buildCalendar(p){
+  const y=p.year;
+  const isLeap=(y%4===0&&y%100!==0)||y%400===0;
+  const totalDays=isLeap?366:365;
+  const days=[], weekdayIdx=[];
+  const start=new Date(y,0,1);
+  for(let i=0;i<totalDays;i++){
+    const d=new Date(start.getTime()); d.setDate(d.getDate()+i);
+    const jsDay=d.getDay();                           // 0=周日..6=周六
+    const epsDow=(jsDay===0?7:jsDay)-1;               // 0=周一..6=周日
+    const weekend=(jsDay===0||jsDay===6);
+    days.push({m:d.getMonth(), epsDow, doy:i, isWork:!weekend});
+    if(!weekend) weekdayIdx.push(i);
+  }
+  // 节假日：全年工作日中均匀取 N 天置为停工（确定性占位；真实清单由其他模块提供）
+  const nh=Math.min(p.holidays,weekdayIdx.length);
+  for(let k=0;k<nh;k++) days[weekdayIdx[Math.floor((k+0.5)*weekdayIdx.length/nh)]].isWork=false;
+  return {days,totalDays,isLeap};
+}
+
+// ---------- 主计算：生成全年 → 逐月电量归一化 ----------
+function compute(p){
+  const T=buildTemplate(p);
+  const cal=buildCalendar(p);
+  const P=p.ppeak, NF=DAY_FACTOR.length;
+
+  const ebaseWd=P*T.base.reduce((a,b)=>a+b,0);        // 单工作日基载电量
+  const eprodWdRaw=P*T.prodRaw.reduce((a,b)=>a+b,0);  // 单工作日生产电量(A=1)
+  const ebaseOd=P*p.boff*24;                          // 单停工日电量
+
+  const Nw=Array(12).fill(0), Noff=Array(12).fill(0);
+  cal.days.forEach(d=>{ d.isWork?Nw[d.m]++:Noff[d.m]++; });
+
+  // 月电量 E_m = 电网(账单) + 柴油(按天数分摊)
+  const Em=Array(12),Ebase=Array(12),Aw=Array(12),degrade=Array(12).fill(false),mscale=Array(12).fill(1);
+  for(let m=0;m<12;m++){
+    const Ediesel_m=p.ediesel*(Nw[m]+Noff[m])/cal.totalDays;
+    Em[m]=p.Egrid[m]+Ediesel_m;
+    Ebase[m]=Nw[m]*ebaseWd + Noff[m]*ebaseOd;
+    const Eprod=Nw[m]*eprodWdRaw;
+    if(Em[m]<=Ebase[m]){ degrade[m]=true; Aw[m]=0; mscale[m]=Ebase[m]>0?Em[m]/Ebase[m]:0; } // 退化：整月等比压低
+    else Aw[m]=Eprod>0?(Em[m]-Ebase[m])/Eprod:0;      // 账单反解生产系数
+  }
+
+  // pre-ε 日轮廓仅依赖 (isWork, m)，缓存
+  const preCache={};
+  function preProfile(isWork,m){
+    const k=(isWork?1:0)+"_"+m;
+    if(preCache[k]) return preCache[k];
+    const arr=Array(24), baseArr=Array(24);
+    for(let h=0;h<24;h++){
+      let pre = isWork ? P*(T.base[h]+Aw[m]*T.prodRaw[h]) : P*p.boff;
+      let bpre= isWork ? P*T.base[h] : P*p.boff;
+      if(degrade[m]){ pre*=mscale[m]; bpre*=mscale[m]; }
+      arr[h]=pre; baseArr[h]=bpre;
+    }
+    return preCache[k]={arr,baseArr};
+  }
+  const epsMult=(doy,dow,h)=> p.epson ? 1 + p.amp*(DAY_FACTOR[doy%NF] + 0.4*HOUR_TEX[h][dow]) : 1;
+  function dayProfile(d){
+    const pre=preProfile(d.isWork,d.m), arr=Array(24), baseArr=Array(24);
+    for(let h=0;h<24;h++){ const e=epsMult(d.doy,d.epsDow,h); arr[h]=pre.arr[h]*e; baseArr[h]=pre.baseArr[h]*e; }
+    return {arr,baseArr,sum:arr.reduce((a,b)=>a+b,0),baseSum:baseArr.reduce((a,b)=>a+b,0)};
+  }
+
+  // pass1：月内含 ε 总量 → 归一化因子（电量第一优先）
+  const monthSum=Array(12).fill(0);
+  cal.days.forEach(d=>{ monthSum[d.m]+=dayProfile(d).sum; });
+  const renorm=Em.map((e,m)=>monthSum[m]>0?e/monthSum[m]:0);
+
+  // pass2：max(P)、代表日、逐月基载/生产
+  let maxP=0;
+  const wdList=[], odList=[], monthBase=Array(12).fill(0);
+  cal.days.forEach(d=>{
+    const pr=dayProfile(d), r=renorm[d.m];
+    for(let h=0;h<24;h++){ const v=pr.arr[h]*r; if(v>maxP)maxP=v; }
+    monthBase[d.m]+=pr.baseSum*r;
+    (d.isWork?wdList:odList).push({energy:pr.sum*r, doy:d.doy, epsDow:d.epsDow, isWork:d.isWork, m:d.m});
+  });
+  function repDay(list){                               // 代表日 = 日电量中位数那天
+    if(!list.length)return null;
+    const md=list.slice().sort((a,b)=>a.energy-b.energy)[Math.floor((list.length-1)/2)];
+    const pr=dayProfile(md), r=renorm[md.m];
+    return {curve:pr.arr.map(v=>v*r), base:pr.baseArr.map(v=>v*r), energy:md.energy, m:md.m, dow:md.epsDow};
+  }
+  const repWd=repDay(wdList), repOd=repDay(odList);
+
+  const monthProd=Em.map((e,m)=>Math.max(0,e-monthBase[m]));
+  const Etotal=Em.reduce((a,b)=>a+b,0);
+  const LF=Etotal/(P*cal.totalDays*24);
+  const baseShare=Etotal>0?monthBase.reduce((a,b)=>a+b,0)/Etotal:0;
+  return {Em,monthBase,monthProd,Etotal,LF,maxP,baseShare,Aw,degrade,repWd,repOd,isLeap:cal.isLeap};
+}
+
+// ---------- 渲染：指标 + 校验提示 ----------
+function renderMetrics(p,r){
+  const awMin=Math.min(...r.Aw),awMax=Math.max(...r.Aw);
+  const awStr=Math.abs(awMax-awMin)<1e-6?awMin.toFixed(3):awMin.toFixed(2)+"~"+awMax.toFixed(2);
+  const M=[
+    ["生产系数 A_work（月区间）", awStr, awMin<0?"err":"ok"],
+    ["年 max(P)", r.maxP.toFixed(0)+"<small> kW</small>", "ok"],
+    ["max(P)/P_peak", (r.maxP/p.ppeak*100).toFixed(0)+"<small> %</small>", "ok"],
+    ["年负载率 LF", (r.LF*100).toFixed(1)+"<small> %</small>", r.LF>=1?"err":r.LF<0.15?"warn":"ok"],
+    ["基载电量占比", (r.baseShare*100).toFixed(1)+"<small> %</small>", "ok"],
+    ["年总电量", (r.Etotal/1000).toFixed(0)+"<small> MWh · "+(r.isLeap?"8784":"8760")+"h</small>", "ok"],
+  ];
+  $("metrics").innerHTML=M.map(([k,v])=>`<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+  const alerts=[];
+  if(p.billErr) alerts.push(["err",`月账单需 1 个或 12 个值，当前 ${p.nbills} 个 → 已按首值兜底。`]);
+  if(p.segs.length===0) alerts.push(["err","工作时段解析为空，请检查格式（如 8-18 / 0-24）。"]);
+  if(r.LF>=1) alerts.push(["err","阻断：LF ≥ 1，电量配不上此峰值，A_work 无解 → 下调电量或上调 P_peak。"]);
+  else if(r.LF<0.15) alerts.push(["warn","警告：LF < 0.15，峰值可能虚高（照常生成）。"]);
+  const degMonths=r.degrade.map((d,m)=>d?MONTH_NAMES[m]:null).filter(Boolean);
+  if(degMonths.length) alerts.push(["warn",`自动缩放：${degMonths.join("、")} 月基载电量 ≥ 当月总电量 → 该月整条曲线等比压低、A_work=0。`]);
+  if(r.maxP>p.ppeak*1.001) alerts.push(["ok",`ℹ 峰值 ${(r.maxP/p.ppeak*100).toFixed(0)}% 突破 P_peak（不设硬帽；ε 与电量优先所致）。`]);
+  alerts.push(["ok","✓ 逐月 kWh = 账单+柴油（生成后已逐月归一化）。"]);
+  $("alerts").innerHTML=alerts.map(([c,t])=>`<div class="alert ${c}">${t}</div>`).join("");
+}
+
+// ---------- 渲染：代表日曲线（阶梯面积） ----------
+function drawDayChart(canvasId,rep,ppeak){
+  const cv=$(canvasId), dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=260;
+  cv.width=W*dpr; cv.height=H*dpr;
+  const ctx=cv.getContext("2d"); ctx.scale(dpr,dpr); ctx.clearRect(0,0,W,H);
+  const pad={l:48,r:12,t:12,b:24}, iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
+  if(!rep){ctx.fillStyle="#9aa3b2";ctx.fillText("无数据",W/2,H/2);return;}
+  const ymax=niceMax(Math.max(...rep.curve,ppeak,1));
+  const X=h=>pad.l+(h/24)*iw, Y=v=>pad.t+ih-(v/ymax)*ih;
+  ctx.strokeStyle="#2a2f3a";ctx.fillStyle="#9aa3b2";ctx.font="10px ui-monospace,monospace";ctx.textAlign="right";
+  for(let g=0;g<=5;g++){const y=Y(ymax*g/5);ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();ctx.fillText((ymax*g/5).toFixed(0),pad.l-5,y+3);}
+  ctx.textAlign="center";
+  for(let h=0;h<=24;h+=4) ctx.fillText(h+"h",X(h),H-8);
+  const step=(arr,fill)=>{ctx.beginPath();ctx.moveTo(X(0),Y(0));for(let h=0;h<24;h++){ctx.lineTo(X(h),Y(arr[h]));ctx.lineTo(X(h+1),Y(arr[h]));}ctx.lineTo(X(24),Y(0));ctx.closePath();ctx.fillStyle=fill;ctx.fill();};
+  step(rep.curve,"rgba(79,157,255,.35)");
+  step(rep.base,"rgba(58,74,99,.9)");
+  ctx.beginPath();for(let h=0;h<24;h++){ctx.lineTo(X(h),Y(rep.curve[h]));ctx.lineTo(X(h+1),Y(rep.curve[h]));}ctx.strokeStyle="#4f9dff";ctx.lineWidth=1.6;ctx.stroke();
+  const yp=Y(ppeak);
+  if(yp>pad.t){ctx.beginPath();ctx.moveTo(pad.l,yp);ctx.lineTo(W-pad.r,yp);ctx.strokeStyle="rgba(255,171,64,.7)";ctx.setLineDash([6,4]);ctx.stroke();ctx.setLineDash([]);}
+}
+
+// ---------- 渲染：逐月电量堆叠柱 ----------
+function drawMonth(r){
+  const cv=$("monthChart"), dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=220;
+  cv.width=W*dpr; cv.height=H*dpr;
+  const ctx=cv.getContext("2d"); ctx.scale(dpr,dpr); ctx.clearRect(0,0,W,H);
+  const pad={l:54,r:12,t:12,b:22}, iw=W-pad.l-pad.r, ih=H-pad.t-pad.b;
+  const ymax=niceMax(Math.max(...r.Em,1)), Y=v=>pad.t+ih-(v/ymax)*ih, gap=iw/12, bw=gap*0.6;
+  ctx.strokeStyle="#2a2f3a";ctx.fillStyle="#9aa3b2";ctx.font="10px ui-monospace,monospace";ctx.textAlign="right";
+  for(let g=0;g<=5;g++){const y=Y(ymax*g/5);ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();ctx.fillText((ymax*g/5/1000).toFixed(0)+"k",pad.l-5,y+3);}
+  ctx.textAlign="center";
+  for(let m=0;m<12;m++){
+    const cx=pad.l+gap*m+gap/2, yb=Y(r.monthBase[m]), yt=Y(r.Em[m]);
+    ctx.fillStyle="#3a4a63";ctx.fillRect(cx-bw/2,yb,bw,Y(0)-yb);
+    ctx.fillStyle="rgba(79,157,255,.75)";ctx.fillRect(cx-bw/2,yt,bw,yb-yt);
+    ctx.fillStyle=r.degrade[m]?"#ffcc4d":"#9aa3b2";ctx.fillText(MONTH_NAMES[m],cx,H-7);
+  }
+}
+
+// ---------- 主循环 ----------
+function update(){
+  const p=readParams();
+  $("boffV").textContent=$("boff").value+"%";
+  $("bworkV").textContent=$("bwork").value+"%";
+  const r=compute(p);
+  renderMetrics(p,r);
+  drawDayChart("wdChart",r.repWd,p.ppeak);
+  drawDayChart("odChart",r.repOd,p.ppeak);
+  drawMonth(r);
+  $("wdLabel").textContent=r.repWd?`工作日代表日（${DOW_NAMES[r.repWd.dow]}型 · ${r.repWd.m+1}月 · 日电量 ${(r.repWd.energy/1000).toFixed(1)} MWh）`:"工作日代表日";
+  $("odLabel").textContent=r.repOd?`非工作日代表日（${r.repOd.m+1}月 · 日电量 ${(r.repOd.energy/1000).toFixed(1)} MWh）`:"非工作日代表日";
+}
+
+// ---------- 初始化 ----------
+function applyPreset(cat,name){
+  const d=PRESETS[cat][name]; if(!d)return;
+  $("boff").value=d.boff; $("bwork").value=d.bwork;
+  $("segments").value=d.seg; $("lunchd").value=d.ld; $("lunchseg").value=d.ls;
+  $("mu1").value=d.p[0][0]; $("sig1").value=d.p[0][1];
+  $("mu2").value=d.p[1]?d.p[1][0]:""; $("sig2").value=d.p[1]?d.p[1][1]:"";
+  $("amp").value=d.amp;
+  update();
+}
+(function init(){
+  const sel=$("preset");
+  for(const cat in PRESETS){
+    const og=document.createElement("optgroup"); og.label=cat;
+    for(const name in PRESETS[cat]){const o=document.createElement("option");o.value=cat+"||"+name;o.textContent=name;og.appendChild(o);}
+    sel.appendChild(og);
+  }
+  sel.addEventListener("change",e=>{const [c,n]=e.target.value.split("||");applyPreset(c,n);});
+  document.querySelectorAll("input,select").forEach(el=>{el.addEventListener("input",update);el.addEventListener("change",update);});
+  window.addEventListener("resize",update);
+  sel.value="制造业||Garment 制衣";
+  applyPreset("制造业","Garment 制衣");
+})();
+</script>
+</body>
+</html>

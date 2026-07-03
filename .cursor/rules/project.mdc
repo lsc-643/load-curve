@@ -1,0 +1,7 @@
+---
+description: 负载曲线生成器 · 项目上下文
+alwaysApply: true
+---
+
+改本仓库任何代码前，先读 `AGENTS.md`（规范源）与 `ONBOARDING.md`（完整说明）；
+改具体逻辑前读对应来源文档：需求 `负载生成规则.md`、算法 `SPEC-AlphaProposal-负载曲线生成算法.md`、纹理数据 `ε_噪声表.xlsx`（经 `tools/gen_texture_js.py` 生成 `DAY_FACTOR`/`HOUR_TEX`）。
