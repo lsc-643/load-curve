@@ -95,8 +95,8 @@
     <fieldset>
       <legend>电量与峰值</legend>
       <div class="row"><label>峰值 P_peak</label><input type="number" id="ppeak" value="800" step="10"><span class="hint">kW</span></div>
-      <div class="row"><label>月账单电量</label><input type="text" id="bills" value="120000" style="width:180px"></div>
-      <div class="row"><span class="hint">1 个值=全年同值；或 12 个逗号值 kWh</span></div>
+      <div class="row"><label>月账单电量</label><input type="text" id="bills" value="120000" style="width:150px"><span class="hint">kWh</span></div>
+      <div class="row"><span class="hint">1 个值=全年同值；或 12 个逗号值</span></div>
       <div class="row"><label>年柴油供电量</label><input type="number" id="ediesel" value="0" step="5000"><span class="hint">kWh</span></div>
     </fieldset>
 
@@ -125,8 +125,8 @@
 
     <fieldset>
       <legend>生产峰形状 g[h]（高斯叠加）</legend>
-      <div class="row"><label>峰1 μ₁ / σ₁</label><input type="number" id="mu1" value="10.5" step="0.5" style="width:52px"><input type="number" id="sig1" value="1.5" step="0.5" style="width:52px"></div>
-      <div class="row"><label>峰2 μ₂ / σ₂</label><input type="number" id="mu2" value="15" step="0.5" style="width:52px"><input type="number" id="sig2" value="1.5" step="0.5" style="width:52px"></div>
+      <div class="row"><label>峰1 μ₁ / σ₁</label><input type="number" id="mu1" value="10.5" step="0.5" style="width:72px"><input type="number" id="sig1" value="1.5" step="0.5" style="width:72px"></div>
+      <div class="row"><label>峰2 μ₂ / σ₂</label><input type="number" id="mu2" value="15" step="0.5" style="width:72px"><input type="number" id="sig2" value="1.5" step="0.5" style="width:72px"></div>
       <div class="row"><span class="hint">尖峰 σ1.5~2.5；近平直 σ8~10；峰2 留空=单峰</span></div>
     </fieldset>
 
